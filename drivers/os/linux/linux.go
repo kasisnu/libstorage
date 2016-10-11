@@ -193,6 +193,10 @@ func (d *driver) isNfsDevice(device string) bool {
 	return strings.Contains(device, ":")
 }
 
+func (d *driver) isS3fsDevice(device string) bool {
+	return strings.Contains(device, "s3fs://")
+}
+
 func (d *driver) nfsMount(device, target string) error {
 	command := exec.Command("mount", device, target)
 	output, err := command.CombinedOutput()

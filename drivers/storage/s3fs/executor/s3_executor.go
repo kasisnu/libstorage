@@ -4,13 +4,10 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"io/ioutil"
-	"net/http"
 	"os"
 	"strings"
 
 	"github.com/akutz/gofig"
-	"github.com/akutz/goof"
 
 	"github.com/emccode/libstorage/api/registry"
 	"github.com/emccode/libstorage/api/types"
@@ -19,8 +16,7 @@ import (
 
 // driver is the storage executor for the s3fs storage driver.
 type driver struct {
-	config         gofig.Config
-	subnetResolver SubnetResolver
+	config gofig.Config
 }
 
 const (
@@ -33,9 +29,7 @@ func init() {
 }
 
 func newDriver() types.StorageExecutor {
-	return &driver{
-		subnetResolver: NewAwsVpcSubnetResolver(),
-	}
+	return &driver{}
 }
 
 func (d *driver) Init(ctx types.Context, config gofig.Config) error {
@@ -57,17 +51,10 @@ func (d *driver) InstanceID(
 	ctx types.Context,
 	opts types.Store) (*types.InstanceID, error) {
 
-	subnetID, err := d.subnetResolver.ResolveSubnet()
-	if err != nil {
-		return nil, goof.WithError("no ec2metadata subnet id", err)
-	}
-
-	iid := &types.InstanceID{Driver: s3fs.Name}
-	if err := iid.MarshalMetadata(subnetID); err != nil {
-		return nil, err
-	}
-
-	return iid, nil
+	return &types.InstanceID{
+		Driver: d.Name(),
+		ID:     "some-instance-id",
+	}, nil
 }
 
 func (d *driver) NextDevice(
@@ -80,19 +67,20 @@ func (d *driver) LocalDevices(
 	ctx types.Context,
 	opts *types.LocalDevicesOpts) (*types.LocalDevices, error) {
 
-	mtt, err := parseMountTable()
-	if err != nil {
-		return nil, err
-	}
+	//mtt, err := parseMountTable()
+	//if err != nil {
+	//return nil, err
+	//}
 
-	idmnt := make(map[string]string)
-	for _, mt := range mtt {
-		idmnt[mt.Source] = mt.MountPoint
-	}
+	//idmnt := make(map[string]string)
+	//for _, mt := range mtt {
+	//idmnt[mt.Source] = mt.MountPoint
+	//}
 
 	return &types.LocalDevices{
-		Driver:    s3fs.Name,
-		DeviceMap: idmnt,
+		Driver: s3fs.Name,
+		//DeviceMap: idmnt,
+		DeviceMap: map[string]string{},
 	}, nil
 }
 
@@ -147,50 +135,4 @@ func parseInfoFile(r io.Reader) ([]*types.MountInfo, error) {
 	return out, nil
 }
 
-// SubnetResolver defines interface that can resolve subnet from environment
-type SubnetResolver interface {
-	ResolveSubnet() (string, error)
-}
-
-// AwsVpcSubnetResolver is thin interface that resolves instance subnet from
-// ec2metadata service. This helper is used instead of bringing AWS SDK to
-// executor on purpose to keep executor dependencies minimal.
-type AwsVpcSubnetResolver struct {
-	ec2MetadataIPAddress string
-}
-
-// ResolveSubnet determines VPC subnet id on running AWS instance
-func (r *AwsVpcSubnetResolver) ResolveSubnet() (string, error) {
-	resp, err := http.Get(r.getURL("mac"))
-	if err != nil {
-		return "", err
-	}
-	mac, err := ioutil.ReadAll(resp.Body)
-	resp.Body.Close()
-	if err != nil {
-		return "", err
-	}
-
-	resp, err = http.Get(r.getURL(fmt.Sprintf("network/interfaces/macs/%s/subnet-id", mac)))
-	if err != nil {
-		return "", err
-	}
-	subnetID, err := ioutil.ReadAll(resp.Body)
-	resp.Body.Close()
-	if err != nil {
-		return "", err
-	}
-
-	return string(subnetID), nil
-}
-
-func (r *AwsVpcSubnetResolver) getURL(path string) string {
-	return fmt.Sprintf("http://%s/latest/meta-data/%s", r.ec2MetadataIPAddress, path)
-}
-
-// NewAwsVpcSubnetResolver creates AwsVpcSubnetResolver for default AWS endpoint
-func NewAwsVpcSubnetResolver() *AwsVpcSubnetResolver {
-	return &AwsVpcSubnetResolver{
-		ec2MetadataIPAddress: "169.254.169.254",
-	}
-}
+var _ = (types.StorageExecutor)(nil)
