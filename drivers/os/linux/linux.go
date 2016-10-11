@@ -93,6 +93,18 @@ func (d *driver) Mount(
 		return nil
 	}
 
+	if d.isS3fsDevice(deviceName) {
+
+		if err := d.s3fsMount(deviceName, mountPoint); err != nil {
+			return err
+		}
+
+		os.MkdirAll(d.volumeMountPath(mountPoint), d.fileModeMountPath())
+		os.Chmod(d.volumeMountPath(mountPoint), d.fileModeMountPath())
+
+		return nil
+	}
+
 	fsType, err := probeFsType(deviceName)
 	if err != nil {
 		return err
@@ -183,6 +195,16 @@ func (d *driver) isNfsDevice(device string) bool {
 
 func (d *driver) nfsMount(device, target string) error {
 	command := exec.Command("mount", device, target)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return goof.WithError(fmt.Sprintf("failed mounting: %s", output), err)
+	}
+
+	return nil
+}
+
+func (d *driver) s3fsMount(device, target string) error {
+	command := exec.Command("mount", "-t", "s3fs", device, target)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return goof.WithError(fmt.Sprintf("failed mounting: %s", output), err)
