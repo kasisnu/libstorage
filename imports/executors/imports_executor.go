@@ -6,6 +6,7 @@ import (
 	_ "github.com/codedellemc/libstorage/drivers/storage/efs/executor"
 	//_ "github.com/codedellemc/libstorage/drivers/storage/gce/executor"
 	_ "github.com/codedellemc/libstorage/drivers/storage/isilon/executor"
+	_ "github.com/codedellemc/libstorage/drivers/storage/objectivefs/executor"
 	//_ "github.com/codedellemc/libstorage/drivers/storage/openstack/executor"
 	_ "github.com/codedellemc/libstorage/drivers/storage/scaleio/executor"
 	_ "github.com/codedellemc/libstorage/drivers/storage/vbox/executor"

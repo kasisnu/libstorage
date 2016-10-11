@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"syscall"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/akutz/gofig"
@@ -80,6 +81,18 @@ func (d *driver) Mount(
 	ctx types.Context,
 	deviceName, mountPoint string,
 	opts *types.DeviceMountOpts) error {
+
+	if d.isObjectivefsDevice(deviceName) {
+
+		if err := d.objectivefsMount(deviceName, mountPoint); err != nil {
+			return err
+		}
+
+		os.MkdirAll(d.volumeMountPath(mountPoint), d.fileModeMountPath())
+		os.Chmod(d.volumeMountPath(mountPoint), d.fileModeMountPath())
+
+		return nil
+	}
 
 	if d.isNfsDevice(deviceName) {
 
@@ -181,11 +194,70 @@ func (d *driver) isNfsDevice(device string) bool {
 	return strings.Contains(device, ":")
 }
 
+func (d *driver) isObjectivefsDevice(device string) bool {
+	return strings.Contains(device, "s3://")
+}
+
 func (d *driver) nfsMount(device, target string) error {
 	command := exec.Command("mount", device, target)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return goof.WithError(fmt.Sprintf("failed mounting: %s", output), err)
+	}
+
+	return nil
+}
+
+func (d *driver) objectivefsMount(device, target string) error {
+	command := exec.Command("mount", "-t", "objectivefs", device, target)
+
+	p := d.config.GetString("linux.volume.objectivefsPassphrase")
+	if p == "" {
+		return goof.New("missing license: set correct linux.volume.objectivefsPassphrase")
+	}
+
+	passphrase := p + "\n"
+	passphraseInput := strings.NewReader(passphrase)
+	command.Stdin = passphraseInput
+
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	// Make sure command runs without a controlling terminal
+	// This is to make sure input can only be read from our buffer
+	// and that the process cannot open other fds to /dev/((tty)|(console))
+	// See: https://golang.org/pkg/syscall/#SysProcAttr
+	//
+	if command.SysProcAttr == nil {
+		command.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	// Setsid has to be set for Setctty to have an effect
+	command.SysProcAttr.Setctty = false
+	command.SysProcAttr.Setsid = true
+
+	err := command.Run()
+	if err != nil {
+		return goof.WithFields(log.Fields{
+			"action": "objectivefsMount",
+			"args":   command.Args,
+			"stdout": stdout.String(),
+			"stderr": stderr.String(),
+			"err":    err.Error(),
+		}, fmt.Sprintf("failed mounting %s to %s", device, target))
+	}
+
+	successful, err := mounted(target)
+	if err != nil {
+		return goof.WithError(fmt.Sprintf("failed to verify mount %s to %s", device, target), err)
+	}
+
+	if !successful {
+		return goof.WithFields(log.Fields{
+			"action": "objectivefsMount",
+			"args":   command.Args,
+			"stdout": stdout.String(),
+			"stderr": stderr.String(),
+		}, fmt.Sprintf("failed mounting %s to %s", device, target))
 	}
 
 	return nil
@@ -262,5 +334,6 @@ func configRegistration() *gofig.Registration {
 	r := gofig.NewRegistration("Linux")
 	r.Key(gofig.Int, "", 0700, "", "linux.volume.filemode")
 	r.Key(gofig.String, "", "/data", "", "linux.volume.rootpath")
+	r.Key(gofig.String, "", "", "", "linux.volume.objectivefsPassphrase")
 	return r
 }
