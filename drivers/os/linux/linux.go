@@ -81,6 +81,18 @@ func (d *driver) Mount(
 	deviceName, mountPoint string,
 	opts *types.DeviceMountOpts) error {
 
+	if d.isGlusterfsDevice(deviceName) {
+
+		if err := d.glusterfsMount(deviceName, mountPoint); err != nil {
+			return err
+		}
+
+		os.MkdirAll(d.volumeMountPath(mountPoint), d.fileModeMountPath())
+		os.Chmod(d.volumeMountPath(mountPoint), d.fileModeMountPath())
+
+		return nil
+	}
+
 	if d.isNfsDevice(deviceName) {
 
 		if err := d.nfsMount(deviceName, mountPoint); err != nil {
@@ -183,6 +195,20 @@ func (d *driver) isNfsDevice(device string) bool {
 
 func (d *driver) nfsMount(device, target string) error {
 	command := exec.Command("mount", device, target)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return goof.WithError(fmt.Sprintf("failed mounting: %s", output), err)
+	}
+
+	return nil
+}
+
+func (d *driver) isGlusterfsDevice(device string) bool {
+	return strings.Contains(device, ".gluster")
+}
+
+func (d *driver) glusterfsMount(device, target string) error {
+	command := exec.Command("mount", "-t", "glusterfs", device, target)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return goof.WithError(fmt.Sprintf("failed mounting: %s", output), err)
