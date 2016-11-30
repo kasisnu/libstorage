@@ -12,6 +12,12 @@ import (
 	log "github.com/Sirupsen/logrus"
 	"github.com/akutz/gofig"
 	"github.com/akutz/goof"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/credentials/ec2rolecreds"
+	"github.com/aws/aws-sdk-go/aws/ec2metadata"
+	"github.com/aws/aws-sdk-go/aws/session"
+	awss3 "github.com/aws/aws-sdk-go/service/s3"
 
 	"github.com/codedellemc/libstorage/api/context"
 	"github.com/codedellemc/libstorage/api/registry"
@@ -253,19 +259,53 @@ func (d *driver) VolumeRemove(
 	volumeID string,
 	opts types.Store) error {
 
-	if volumeID == "" {
-		return ErrMissingVolID
+	// TODO(kasisnu): Add support for admin deletes, which don't require direct aws calls
+
+	client := d.s3Client()
+
+	deletables := []*awss3.ObjectIdentifier{}
+
+	params := &awss3.ListObjectsInput{
+		Bucket: aws.String(volumeID),
 	}
 
-	cmd := d.objectivefsAdmin(
-		"destroy",
-		[]string{
-			volumeID,
+	resp, err := client.ListObjects(params)
+	if err != nil {
+		return err
+	}
+
+	for _, key := range resp.Contents {
+		deletables = append(deletables, &awss3.ObjectIdentifier{Key: key.Key})
+	}
+
+	for *resp.IsTruncated {
+		resp, err := client.ListObjects(params)
+		if err != nil {
+			return err
+		}
+
+		for _, key := range resp.Contents {
+			deletables = append(deletables, &awss3.ObjectIdentifier{Key: key.Key})
+		}
+	}
+
+	//TODO(kasisnu): Batch delete requests for large buckets?
+	if len(deletables) > 0 {
+		_, err = client.DeleteObjects(&awss3.DeleteObjectsInput{
+			Bucket: aws.String(volumeID),
+			Delete: &awss3.Delete{
+				Objects: deletables,
+			},
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	_, err = client.DeleteBucket(
+		&awss3.DeleteBucketInput{
+			Bucket: aws.String(volumeID),
 		},
-		nil,
-		//map[string]string{
-		//"OBJECTIVEFS_PASSPHRASE": d.passphrase(),
-		//},
 	)
 	confirmation := "y" + "\n"
 	confirmationInput := strings.NewReader(confirmation)
@@ -286,7 +326,11 @@ func (d *driver) VolumeRemove(
 	cmd.SysProcAttr.Setctty = false
 	cmd.SysProcAttr.Setsid = true
 
-	err := cmd.Run()
+	err = client.WaitUntilBucketNotExists(
+		&awss3.HeadBucketInput{
+			Bucket: aws.String(volumeID),
+		},
+	)
 	if err != nil {
 		return goof.WithFields(log.Fields{
 			"action": "volumeRemove",
@@ -552,4 +596,26 @@ func (d *driver) objectivefsAdmin(subcommand string,
 	cmd := exec.Command(objectivefsBinary, args...)
 	cmd.Env = objectivefsEnv
 	return cmd
+}
+
+func (d *driver) s3Client() *awss3.S3 {
+	client := awss3.New(session.New(),
+		aws.NewConfig().
+			WithRegion(d.region()).
+			WithCredentials(credentials.NewChainCredentials(
+				[]credentials.Provider{
+					&credentials.StaticProvider{
+						Value: credentials.Value{
+							AccessKeyID:     d.accessKey(),
+							SecretAccessKey: d.secretKey(),
+						},
+					},
+					&credentials.EnvProvider{},
+					&credentials.SharedCredentialsProvider{},
+					&ec2rolecreds.EC2RoleProvider{
+						Client: ec2metadata.New(session.New()),
+					},
+				})),
+	)
+	return client
 }
